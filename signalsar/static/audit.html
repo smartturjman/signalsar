@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignalSAR - Audit Log</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">🚨 SignalSAR</div>
+        <div class="nav-links">
+            <a href="/">Alert Queue</a>
+            <a href="/audit.html" class="active">Audit Log</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="header">
+            <h1>Audit Log</h1>
+        </div>
+
+        <table class="alert-table">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Case ID</th>
+                    <th>Analyst</th>
+                    <th>Action</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody id="auditTableBody">
+                <tr><td colspan="5" class="loading">Loading audit log...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        const API_BASE = `${window.location.origin}/api`;
+
+        function parseDetails(detailsStr) {
+            try {
+                const details = JSON.parse(detailsStr);
+                if (typeof details === 'object' && details !== null) {
+                    return Object.entries(details)
+                        .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+                        .join(', ');
+                }
+                return detailsStr;
+            } catch (e) {
+                return detailsStr;
+            }
+        }
+
+        async function loadAuditLog() {
+            const response = await fetch(`${API_BASE}/audit`);
+            const logs = await response.json();
+
+            const tbody = document.getElementById('auditTableBody');
+            
+            if (logs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty">No audit entries found</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = logs.map(log => `
+                <tr>
+                    <td>${new Date(log.timestamp).toLocaleString()}</td>
+                    <td>#${log.case_id}</td>
+                    <td>${log.analyst}</td>
+                    <td><span class="action-badge">${log.action}</span></td>
+                    <td class="details-cell">${parseDetails(log.details)}</td>
+                </tr>
+            `).join('');
+        }
+
+        loadAuditLog();
+    </script>
+</body>
+</html>

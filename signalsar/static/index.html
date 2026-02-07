@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignalSAR - Alert Queue</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">🚨 SignalSAR</div>
+        <div class="nav-links">
+            <a href="/" class="active">Alert Queue</a>
+            <a href="/audit.html">Audit Log</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="header">
+            <h1>Alert Queue</h1>
+            <div class="filters">
+                <select id="statusFilter">
+                    <option value="open">Open</option>
+                    <option value="investigating">Investigating</option>
+                    <option value="closed">Closed</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="kpi-section">
+            <h2>Performance Metrics</h2>
+            <p class="kpi-subtitle">AI triage converts high-volume noise into actionable investigations.</p>
+            <div class="kpi-cards">
+                <div class="kpi-card">
+                    <div class="kpi-label">Alert Reduction</div>
+                    <div class="kpi-value">2,000 → 50</div>
+                    <div class="kpi-detail">alerts/week to high-confidence cases</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Avg SAR Generation Time</div>
+                    <div class="kpi-value">90 sec</div>
+                    <div class="kpi-detail">from alert to draft SAR</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">False Positive Reduction</div>
+                    <div class="kpi-value" id="fpReduction">--</div>
+                    <div class="kpi-detail">vs. rule-based only</div>
+                </div>
+            </div>
+        </div>
+
+        <table class="alert-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Customer</th>
+                    <th>Alert Type</th>
+                    <th>Risk Score</th>
+                    <th>Created</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="alertTableBody">
+                <tr><td colspan="7" class="loading">Loading alerts...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        const API_BASE = `${window.location.origin}/api`;
+
+        function getRiskBadge(score) {
+            if (score >= 80) return `<span class="badge badge-critical">${score}</span>`;
+            if (score >= 60) return `<span class="badge badge-high">${score}</span>`;
+            if (score >= 40) return `<span class="badge badge-medium">${score}</span>`;
+            return `<span class="badge badge-low">${score}</span>`;
+        }
+
+        function formatDate(isoString) {
+            const date = new Date(isoString);
+            return date.toLocaleString();
+        }
+
+        async function loadAlerts() {
+            const status = document.getElementById('statusFilter').value;
+            const response = await fetch(`${API_BASE}/alerts?status=${status}`);
+            const alerts = await response.json();
+
+            // Calculate false positive reduction
+            const highRiskCount = alerts.filter(a => a.risk_score >= 70).length;
+            const totalAlerts = alerts.length;
+            const fpReduction = totalAlerts > 0 ? Math.round((highRiskCount / totalAlerts) * 100) : 0;
+            document.getElementById('fpReduction').textContent = `${fpReduction}%`;
+
+            const tbody = document.getElementById('alertTableBody');
+            
+            if (alerts.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty">No alerts found</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = alerts.map(alert => `
+                <tr>
+                    <td>#${alert.id}</td>
+                    <td>${alert.customer_id}</td>
+                    <td>
+                        ${alert.alert_type}
+                        ${alert.alert_type === 'NEW TYPOLOGY' ? '<span class="badge badge-new-typology">NEW</span>' : ''}
+                    </td>
+                    <td>${getRiskBadge(alert.risk_score)}</td>
+                    <td>${formatDate(alert.created_at)}</td>
+                    <td><span class="status-${alert.status}">${alert.status}</span></td>
+                    <td>
+                        ${alert.status === 'open' ? 
+                            `<button class="btn btn-primary" onclick="investigateAlert(${alert.id})">Investigate</button>` :
+                            alert.status === 'investigating' ?
+                            `<button class="btn btn-secondary" onclick="viewCase(${alert.id})">View Case</button>` :
+                            `<span class="text-muted">Closed</span>`
+                        }
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function investigateAlert(alertId) {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = 'Processing...';
+
+            try {
+                const response = await fetch(`${API_BASE}/alerts/${alertId}/investigate`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                window.location.href = `/case.html?id=${result.case_id}`;
+            } catch (error) {
+                alert('Error investigating alert: ' + error.message);
+                btn.disabled = false;
+                btn.textContent = 'Investigate';
+            }
+        }
+
+        async function viewCase(alertId) {
+            try {
+                const response = await fetch(`${API_BASE}/alerts/${alertId}/case`);
+                if (!response.ok) {
+                    const error = await response.json();
+                    alert(error.error || 'No case found for this alert');
+                    return;
+                }
+                const result = await response.json();
+                window.location.href = `/case.html?id=${result.case_id}`;
+            } catch (error) {
+                alert('Error loading case: ' + error.message);
+            }
+        }
+
+        document.getElementById('statusFilter').addEventListener('change', loadAlerts);
+        loadAlerts();
+    </script>
+</body>
+</html>

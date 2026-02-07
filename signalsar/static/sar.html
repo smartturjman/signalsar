@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignalSAR - SAR Draft</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="governance.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">🚨 SignalSAR</div>
+        <div class="nav-links">
+            <a href="/">Alert Queue</a>
+            <a href="/audit.html">Audit Log</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="header">
+            <h1>SAR Draft Review</h1>
+            <button class="btn btn-secondary" onclick="goBack()">← Back to Case</button>
+        </div>
+
+        <div id="sarContent">
+            <div class="loading">Loading SAR draft...</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = `${window.location.origin}/api`;
+        const urlParams = new URLSearchParams(window.location.search);
+        const caseId = urlParams.get('id');
+        let currentCase = null;
+
+        async function loadSAR() {
+            if (!caseId) {
+                document.getElementById('sarContent').innerHTML = '<div class="error">No case ID provided</div>';
+                return;
+            }
+
+            const response = await fetch(`${API_BASE}/cases/${caseId}`);
+            const data = await response.json();
+            currentCase = data;
+
+            const { case: caseData, alert } = data;
+
+            document.getElementById('sarContent').innerHTML = `
+                <div class="sar-grid">
+                    <div class="card">
+                        <h2>Compliance Check</h2>
+                        <div class="compliance-score">
+                            <div class="score-circle ${data.compliance_score >= 100 ? 'score-good' : 'score-warning'}">
+                                ${data.compliance_score}%
+                            </div>
+                            <div class="score-label">Field Completeness</div>
+                        </div>
+                        ${data.compliance_score >= 100 ? 
+                            '<div class="success">✓ All required fields complete</div>' : 
+                            `<div class="warning">
+                                ⚠️ Missing fields:
+                                <ul class="missing-fields-list">
+                                    ${data.missing_fields.map(f => `<li>${f.replace('_', ' ')}</li>`).join('')}
+                                </ul>
+                            </div>`
+                        }
+                    </div>
+
+                    <div class="card">
+                        <h2>🔒 Governance Gate</h2>
+                        <div class="governance-checks-compact">
+                            <div class="check-item ${data.governance_checks.typology_confirmed ? 'check-pass' : 'check-fail'}">
+                                ${data.governance_checks.typology_confirmed ? '✓' : '✗'} Typology Confirmed
+                            </div>
+                            <div class="check-item ${data.governance_checks.evidence_linked ? 'check-pass' : 'check-fail'}">
+                                ${data.governance_checks.evidence_linked ? '✓' : '✗'} Evidence Linked
+                            </div>
+                            <div class="check-item ${data.governance_checks.analyst_disposition ? 'check-pass' : 'check-fail'}">
+                                ${data.governance_checks.analyst_disposition ? '✓' : '✗'} Disposition Recorded
+                            </div>
+                        </div>
+                        ${data.governance_checks.can_submit ? 
+                            '<div class="success">✓ Submission enabled</div>' :
+                            '<div class="error">✗ Submission blocked</div>'
+                        }
+                    </div>
+
+                    <div class="card full-width">
+                        <h2>AI-Generated SAR Narrative</h2>
+                        <textarea id="sarNarrative" class="sar-textarea" rows="20">${caseData.sar_draft}</textarea>
+                        <div class="action-bar">
+                            <button class="btn btn-success" onclick="markFeedback(${caseId}, 'true_positive')">✓ Mark True Positive</button>
+                            <button class="btn btn-secondary" onclick="markFeedback(${caseId}, 'false_positive')">✗ Mark False Positive</button>
+                            <button class="btn btn-secondary" onclick="saveDraft()">Save Edits</button>
+                            <button class="btn btn-success" id="submitBtn" ${!currentCase.governance_checks.can_submit ? 'disabled title="Governance checks incomplete"' : ''} onclick="submitSAR()">Submit to Regulatory Portal</button>
+                        </div>
+                    </div>
+
+                    <div class="card full-width">
+                        <h2>Evidence Summary</h2>
+                        <div class="evidence-panel">
+                            <div class="evidence-item">
+                                <strong>Alert Type:</strong> ${alert.alert_type}
+                            </div>
+                            <div class="evidence-item">
+                                <strong>Risk Score:</strong> ${alert.risk_score}
+                            </div>
+                            <div class="evidence-item">
+                                <strong>Transaction Count:</strong> ${data.enriched_data.txn_history.length}
+                            </div>
+                            <div class="evidence-item">
+                                <strong>Total Volume:</strong> $${data.enriched_data.txn_history.reduce((sum, t) => sum + t.amount, 0).toLocaleString()}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="submissionModal" class="modal" style="display: none;">
+                    <div class="modal-content">
+                        <h2>SAR Submitted Successfully</h2>
+                        <p>Submission ID: <strong id="submissionId"></strong></p>
+                        <p>The SAR has been submitted to the regulatory portal and logged for audit.</p>
+                        <button class="btn btn-primary" onclick="window.location.href='/'">Return to Alert Queue</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function saveDraft() {
+            const narrative = document.getElementById('sarNarrative').value;
+            
+            await fetch(`${API_BASE}/cases/${caseId}/sar`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sar_draft: narrative,
+                    analyst: 'analyst@signalsar.com'
+                })
+            });
+
+            alert('Draft saved successfully');
+        }
+
+        async function submitSAR() {
+            if (!currentCase.governance_checks.can_submit) {
+                alert('Cannot submit: Governance checks incomplete.\n\nRequired:\n- Typology must be confirmed\n- Evidence must be linked\n- Analyst disposition must be recorded');
+                return;
+            }
+
+            if (!confirm('Submit this SAR to the regulatory portal? This action cannot be undone.')) {
+                return;
+            }
+
+            const narrative = document.getElementById('sarNarrative').value;
+            
+            // Save any edits first
+            await fetch(`${API_BASE}/cases/${caseId}/sar`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sar_draft: narrative,
+                    analyst: 'analyst@signalsar.com'
+                })
+            });
+
+            // Submit
+            const response = await fetch(`${API_BASE}/cases/${caseId}/submit`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    analyst: 'analyst@signalsar.com'
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                alert('Submission blocked: ' + (error.error || 'Unknown error'));
+                return;
+            }
+
+            const result = await response.json();
+            
+            document.getElementById('submissionId').textContent = result.submission_id;
+            document.getElementById('submissionModal').innerHTML = `
+                <div class="modal-content">
+                    <h2>SAR Submitted Successfully</h2>
+                    <p>Submission ID: <strong>${result.submission_id}</strong></p>
+                    <p>Checksum: <code>${result.checksum.substring(0, 16)}...</code></p>
+                    <p>The SAR has been submitted to the regulatory portal with cryptographic verification.</p>
+                    <button class="btn btn-primary" onclick="window.location.href='/'">Return to Alert Queue</button>
+                </div>
+            `;
+            document.getElementById('submissionModal').style.display = 'flex';
+        }
+
+        function goBack() {
+            window.location.href = `/case.html?id=${caseId}`;
+        }
+
+        async function markFeedback(caseId, label) {
+            showRationaleModal(label, async (rationale, detail) => {
+                const response = await fetch(`${API_BASE}/cases/${caseId}/feedback`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        label: label,
+                        rationale: rationale,
+                        rationale_detail: detail,
+                        analyst: 'analyst@signalsar.com'
+                    })
+                });
+
+                if (response.ok) {
+                    alert(`Marked as ${label.replace('_', ' ')}`);
+                    loadSAR();
+                } else {
+                    const error = await response.json();
+                    alert('Error: ' + (error.error || 'Failed to submit feedback'));
+                }
+            });
+        }
+
+        loadSAR();
+    </script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+signalsar.db
+*.db.backup*
+*.log
+__pycache__/
+*.pyc
+.DS_Store
+venv/
+env/
+
+# Draft slides (untracked until ready)
+docs/slides/drafts/

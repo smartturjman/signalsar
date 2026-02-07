@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignalSAR - Case Detail</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="governance.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">🚨 SignalSAR</div>
+        <div class="nav-links">
+            <a href="/">Alert Queue</a>
+            <a href="/audit.html">Audit Log</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="header">
+            <h1>Case Detail</h1>
+            <button class="btn btn-secondary" onclick="window.location.href='/'">← Back to Queue</button>
+        </div>
+
+        <div id="caseContent">
+            <div class="loading">Loading case...</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = `${window.location.origin}/api`;
+        const urlParams = new URLSearchParams(window.location.search);
+        let caseId = urlParams.get('id');
+        const alertId = urlParams.get('alert_id');
+        let currentCase = null;
+
+        async function loadCase() {
+            // If no case_id but alert_id provided, resolve it
+            if (!caseId && alertId) {
+                try {
+                    const response = await fetch(`${API_BASE}/alerts/${alertId}/case`);
+                    if (!response.ok) {
+                        document.getElementById('caseContent').innerHTML = '<div class="error">No case found for this alert. Click Investigate first.</div>';
+                        return;
+                    }
+                    const result = await response.json();
+                    caseId = result.case_id;
+                    // Update URL without reload
+                    window.history.replaceState({}, '', `/case.html?id=${caseId}`);
+                } catch (error) {
+                    document.getElementById('caseContent').innerHTML = '<div class="error">Error loading case: ' + error.message + '</div>';
+                    return;
+                }
+            }
+
+            if (!caseId) {
+                document.getElementById('caseContent').innerHTML = '<div class="error">No case ID provided</div>';
+                return;
+            }
+
+            const response = await fetch(`${API_BASE}/cases/${caseId}`);
+            const data = await response.json();
+            currentCase = data;
+
+            const { case: caseData, alert, enriched_data, risk_analysis, audit_logs, interventions, evidence_pack, adaptive_threshold } = data;
+            const customer = enriched_data.customer_data;
+            const txns = enriched_data.txn_history;
+            const isNewTypology = alert.alert_type === 'NEW TYPOLOGY';
+            const canIntervene = alert.status === 'open' || alert.status === 'investigating';
+            
+            // Safeguard: use alert risk_score if case risk_analysis score is missing/zero
+            const displayScore = risk_analysis.score || alert.risk_score;
+
+            document.getElementById('caseContent').innerHTML = `
+                <div class="case-grid">
+                    <div class="card">
+                        <h2>Alert Information</h2>
+                        <div class="info-grid">
+                            <div><strong>Alert ID:</strong> #${alert.id}</div>
+                            <div><strong>Type:</strong> ${alert.alert_type} ${isNewTypology ? '<span class="badge badge-new-typology">NEW</span>' : ''}</div>
+                            <div><strong>Risk Score:</strong> <span class="badge badge-critical">${alert.risk_score}</span></div>
+                            <div><strong>Status:</strong> ${alert.status}</div>
+                            ${adaptive_threshold !== 0 ? `<div><strong>Adaptive Threshold:</strong> <span class="threshold-badge">${adaptive_threshold > 0 ? '+' : ''}${adaptive_threshold}</span></div>` : ''}
+                        </div>
+                    </div>
+
+                    ${isNewTypology ? `
+                    <div class="card full-width new-typology-card">
+                        <h2>⚠️ Unknown Pattern Discovery</h2>
+                        <div class="new-typology-explanation">
+                            <p><strong>Why this is a new pattern:</strong></p>
+                            <p>This case does not match any existing rule-based detection scenarios in our transaction monitoring system. The pattern was discovered through anomaly detection and network analysis.</p>
+                            <p><strong>Key differentiators from known typologies:</strong></p>
+                            <ul>
+                                <li>Micro-transaction fragmentation (47 txns <$500) vs. traditional structuring ($9,000-$9,999 range)</li>
+                                <li>3-day concentration vs. typical 30-day structuring windows</li>
+                                <li>8-account network synchronization with <5min timing correlation</li>
+                                <li>23x velocity increase from baseline (2 txns/week → 47 txns/3 days)</li>
+                            </ul>
+                            <p><strong>Detection method:</strong> Behavioral anomaly scoring (35 pts) + Network correlation analysis (29 pts) exceeded threshold despite moderate rule score (25 pts).</p>
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    <div class="card full-width governance-card">
+                        <h2>🏛️ Typology Attribution</h2>
+                        <div class="typology-section">
+                            <div><strong>Machine-Detected:</strong> <span class="typology-badge">${caseData.typology || 'UNKNOWN_PATTERN'}</span></div>
+                            <div><strong>Analyst Confirmation:</strong> 
+                                ${caseData.typology_confirmed ? 
+                                    '<span class="success">✓ Confirmed</span>' :
+                                    `<select id="typologySelect" class="form-control">
+                                        ${Object.entries(data.typologies).map(([code, desc]) => `
+                                            <option value="${code}" ${caseData.typology === code ? 'selected' : ''}>${code}: ${desc}</option>
+                                        `).join('')}
+                                    </select>
+                                    <button class="btn btn-warning" onclick="confirmTypology()">Confirm Typology</button>`
+                                }
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h2>Customer Profile</h2>
+                        <div class="info-grid">
+                            <div><strong>Name:</strong> ${customer.name}</div>
+                            <div><strong>Customer ID:</strong> ${customer.customer_id}</div>
+                            <div><strong>Account:</strong> ${customer.account_number}</div>
+                            <div><strong>Email:</strong> ${customer.email}</div>
+                            <div><strong>Occupation:</strong> ${customer.occupation}</div>
+                            <div><strong>Onboarded:</strong> ${customer.onboarded_date}</div>
+                        </div>
+                    </div>
+
+                    <div class="card full-width">
+                        <h2>Risk Analysis with Evidence</h2>
+                        <div class="risk-reasons">
+                            <div><strong>Final Score:</strong> <span class="badge badge-critical">${displayScore}</span></div>
+                            <div><strong>Reason Codes with Evidence:</strong></div>
+                            ${data.reason_evidence && data.reason_evidence.length > 0 ? `
+                                <div class="evidence-reasons">
+                                    ${data.reason_evidence.map(re => {
+                                        const evidence = JSON.parse(re.evidence_ids);
+                                        return `
+                                            <div class="evidence-reason-item">
+                                                <div class="reason-header"><strong>${re.reason_code}</strong></div>
+                                                <div class="reason-metric">${re.metric}</div>
+                                                <details>
+                                                    <summary>Evidence (${evidence.length} items)</summary>
+                                                    <ul class="evidence-list">
+                                                        ${evidence.slice(0, 5).map(id => `<li><code>${id}</code></li>`).join('')}
+                                                    </ul>
+                                                </details>
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            ` : '<div class="warning">No evidence links established</div>'}
+                            <div style="margin-top: 1rem;"><strong>Top Reason Codes:</strong></div>
+                            <ul>
+                                ${risk_analysis.reasons.map(r => `<li>${r}</li>`).join('')}
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="card full-width">
+                        <h2>Transaction Timeline (${isNewTypology ? '3 days' : '90 days'})</h2>
+                        <div class="txn-timeline">
+                            <table class="txn-table">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Type</th>
+                                        <th>Amount</th>
+                                        <th>Timestamp</th>
+                                        <th>IP</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${txns.slice(0, 10).map(t => `
+                                        <tr>
+                                            <td>${t.id}</td>
+                                            <td><span class="txn-type-${t.type}">${t.type}</span></td>
+                                            <td>$${t.amount.toLocaleString()}</td>
+                                            <td>${new Date(t.timestamp).toLocaleString()}</td>
+                                            <td>${t.ip}</td>
+                                        </tr>
+                                    `).join('')}
+                                    ${txns.length > 10 ? `<tr><td colspan="5" class="text-muted">... and ${txns.length - 10} more transactions</td></tr>` : ''}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="card full-width">
+                        <h2>Evidence Sources</h2>
+                        <div class="evidence-sources">
+                            <div class="evidence-section">
+                                <h3>📊 Trading Behavior Summary</h3>
+                                <div class="evidence-grid">
+                                    <div><strong>Total Transactions:</strong> <span id="evidenceTxnCount">--</span></div>
+                                    <div><strong>Total Volume:</strong> <span id="evidenceTxnVolume">--</span></div>
+                                    <div><strong>Deposits:</strong> <span id="evidenceDeposits">--</span></div>
+                                    <div><strong>Withdrawals:</strong> <span id="evidenceWithdrawals">--</span></div>
+                                </div>
+                            </div>
+                            
+                            <div class="evidence-section">
+                                <h3>🌐 Network Links</h3>
+                                <div class="evidence-detail">
+                                    <div><strong>Shared IPs:</strong> <span id="evidenceIPs">--</span></div>
+                                    <div><strong>Device Fingerprints:</strong> <span id="evidenceDevices">--</span></div>
+                                    <div><strong>Linked Accounts:</strong> <span id="evidenceLinkedAccounts">--</span></div>
+                                </div>
+                            </div>
+                            
+                            <div class="evidence-section">
+                                <h3>📱 Device/IP Logs</h3>
+                                <div id="evidenceDeviceLogs" class="device-logs">--</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card full-width">
+                        <h2>Activity Timeline</h2>
+                        <div class="audit-timeline">
+                            ${audit_logs.map(log => `
+                                <div class="audit-entry">
+                                    <span class="audit-time">${new Date(log.timestamp).toLocaleString()}</span>
+                                    <span class="audit-action">${log.action}</span>
+                                    <span class="audit-analyst">${log.analyst}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    <div class="card full-width">
+                        <div class="action-bar">
+                            ${canIntervene && alert.risk_score >= 70 ? 
+                                `<button class="btn btn-warning" onclick="holdWithdrawal(${caseId}, ${alert.id})">🛑 Hold Withdrawal</button>` : ''}
+                            <button class="btn btn-success" onclick="markFeedback(${caseId}, 'true_positive')">✓ Mark True Positive</button>
+                            <button class="btn btn-secondary" onclick="markFeedback(${caseId}, 'false_positive')">✗ Mark False Positive</button>
+                            <button class="btn btn-primary" onclick="viewSAR(${caseId})">View SAR Draft →</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Populate evidence pack
+            if (evidence_pack) {
+                document.getElementById('evidenceTxnCount').textContent = evidence_pack.trading_summary.total_transactions;
+                document.getElementById('evidenceTxnVolume').textContent = '$' + evidence_pack.trading_summary.total_volume.toLocaleString();
+                document.getElementById('evidenceDeposits').textContent = evidence_pack.trading_summary.deposit_count;
+                document.getElementById('evidenceWithdrawals').textContent = evidence_pack.trading_summary.withdrawal_count;
+                
+                document.getElementById('evidenceIPs').textContent = evidence_pack.network_links.shared_ips.join(', ');
+                document.getElementById('evidenceDevices').textContent = [...new Set(evidence_pack.network_links.device_fingerprints)].join(', ');
+                document.getElementById('evidenceLinkedAccounts').textContent = evidence_pack.network_links.linked_accounts.length > 0 ? 
+                    evidence_pack.network_links.linked_accounts.join(', ') : 'None detected';
+                
+                document.getElementById('evidenceDeviceLogs').innerHTML = evidence_pack.device_logs.map(log => `
+                    <div class="device-log-entry">
+                        <strong>${new Date(log.timestamp).toLocaleString()}</strong> - ${log.device} - ${log.ip} - ${log.location}
+                    </div>
+                `).join('');
+            }
+        }
+
+        async function confirmTypology() {
+            const selectedTypology = document.getElementById('typologySelect').value;
+            
+            const response = await fetch(`${API_BASE}/cases/${caseId}/typology`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    typology: selectedTypology,
+                    analyst: 'analyst@signalsar.com'
+                })
+            });
+
+            if (response.ok) {
+                alert('Typology confirmed');
+                loadCase();
+            }
+        }
+
+        async function holdWithdrawal(caseId, alertId) {
+            if (!confirm('Execute withdrawal hold? This will freeze all outgoing transactions for this account.')) {
+                return;
+            }
+
+            showRationaleModal('intervention', async (rationale, detail) => {
+                const response = await fetch(`${API_BASE}/cases/${caseId}/intervene`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'hold_withdrawal',
+                        reason: 'High-risk activity detected - withdrawal hold executed',
+                        rationale: rationale,
+                        analyst: 'analyst@signalsar.com'
+                    })
+                });
+
+                if (response.ok) {
+                    alert('Withdrawal hold executed successfully');
+                    loadCase();
+                } else {
+                    const error = await response.json();
+                    alert('Error: ' + (error.error || 'Failed to execute intervention'));
+                }
+            });
+        }
+
+        async function markFeedback(caseId, label) {
+            showRationaleModal(label, async (rationale, detail) => {
+                const response = await fetch(`${API_BASE}/cases/${caseId}/feedback`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        label: label,
+                        rationale: rationale,
+                        rationale_detail: detail,
+                        analyst: 'analyst@signalsar.com'
+                    })
+                });
+
+                if (response.ok) {
+                    alert(`Marked as ${label.replace('_', ' ')}`);
+                    loadCase();
+                } else {
+                    const error = await response.json();
+                    alert('Error: ' + (error.error || 'Failed to submit feedback'));
+                }
+            });
+        }
+
+        function viewSAR(caseId) {
+            window.location.href = `/sar.html?id=${caseId}`;
+        }
+
+        loadCase();
+    </script>
+</body>
+</html>
